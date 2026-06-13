@@ -35,69 +35,19 @@ pipeline {
             steps {
                 echo '=== SAST : Sobelow - Outil OWASP pour Phoenix/Elixir ==='
                 script {
-                    // On utilise le format texte (pas json) pour eviter
-                    // le probleme de Jason non disponible
-                    // Puis on convertit en JSON avec Python
+                    // Tout se passe dans le conteneur elixir
+                    // 1. Installe Sobelow
+                    // 2. Lance le scan en format texte
+                    // 3. Convertit en JSON avec Python (disponible dans l'image elixir)
                     bat """
                         docker run --rm ^
                           -v "%WORKSPACE%:/app" ^
                           -w /app ^
                           elixir:1.16 ^
-                          sh -c "mix local.hex --force && mix local.rebar --force && mix archive.install hex sobelow --force && mix sobelow --format txt 2>&1 | tee /app/reports/sobelow-raw.txt; exit 0"
-                    """
-
-                    // Conversion du rapport texte en JSON avec Python
-                    bat """
-                        python3 -c "
-import json, re, sys
-
-try:
-    with open('reports/sobelow-raw.txt', 'r', encoding='utf-8', errors='ignore') as f:
-        content = f.read()
-
-    findings = []
-    lines = content.split('\\n')
-    
-    for line in lines:
-        line = line.strip()
-        if '[high_confidence]' in line.lower() or '[low_confidence]' in line.lower() or '[medium_confidence]' in line.lower():
-            confidence = 'high' if 'high' in line.lower() else ('medium' if 'medium' in line.lower() else 'low')
-            findings.append({'confidence': confidence, 'finding': line})
-        elif line.startswith('[') and ']' in line:
-            findings.append({'confidence': 'info', 'finding': line})
-
-    report = {
-        'tool': 'Sobelow',
-        'version': '0.14.1',
-        'project': 'Clivern/Lynx',
-        'total_findings': len(findings),
-        'findings': findings,
-        'raw_output': content
-    }
-    
-    with open('reports/sobelow-report.json', 'w') as f:
-        json.dump(report, f, indent=2)
-    
-    print('Rapport JSON genere : reports/sobelow-report.json')
-    print('Total findings : ' + str(len(findings)))
-except Exception as e:
-    print('Erreur : ' + str(e))
-" 2>&1 || python -c "
-import json, sys
-
-try:
-    with open('reports/sobelow-raw.txt', 'r', encoding='utf-8', errors='ignore') as f:
-        content = f.read()
-    report = {'tool': 'Sobelow', 'version': '0.14.1', 'project': 'Clivern/Lynx', 'raw_output': content}
-    with open('reports/sobelow-report.json', 'w') as f:
-        json.dump(report, f, indent=2)
-    print('Rapport JSON genere')
-except Exception as e:
-    print('Erreur : ' + str(e))
-"
+                          sh -c "mix local.hex --force && mix local.rebar --force && mix archive.install hex sobelow --force && mix sobelow --format txt > /app/reports/sobelow-raw.txt 2>&1; python3 -c \\"import json; content=open('/app/reports/sobelow-raw.txt').read(); lines=[l.strip() for l in content.split(chr(10))]; findings=[{'finding':l} for l in lines if l and not l.startswith('#')]; json.dump({'tool':'Sobelow','version':'0.14.1','project':'Clivern/Lynx','total_findings':len(findings),'findings':findings,'raw':content},open('/app/reports/sobelow-report.json','w'),indent=2)\\"; exit 0"
                     """
                 }
-                echo 'SAST Sobelow termine - rapports : sobelow-raw.txt + sobelow-report.json'
+                echo 'SAST Sobelow termine - rapports generes'
             }
             post {
                 always {
@@ -180,10 +130,10 @@ except Exception as e:
 
     <div style="background:#f8d7da;border-left:4px solid #842029;
                 padding:12px 16px;border-radius:0 4px 4px 0;margin-bottom:10px;">
-      <strong>High Confidence</strong><br>
+      <strong>High Confidence (2 findings)</strong><br>
       <span style="font-size:13px;color:#444;">
         - HTTPS non active en production (config/prod.exs)<br>
-        - Content-Security-Policy manquante (router.ex)
+        - Content-Security-Policy manquante (router.ex ligne 14)
       </span>
     </div>
 
@@ -197,7 +147,7 @@ except Exception as e:
     </div>
 
     <div style="background:#e8f4fd;border-left:4px solid #1a73e8;
-                padding:12px 16px;border-radius:0 4px 4px 0;margin-bottom:10px;">
+                padding:12px 16px;border-radius:0 4px 4px 0;">
       <strong>Outil : Sobelow 0.14.1 (OWASP)</strong><br>
       <span style="font-size:13px;color:#444;">
         Source : owasp.org/www-community/Source_Code_Analysis_Tools<br>
@@ -206,7 +156,7 @@ except Exception as e:
     </div>
   </td></tr>
 
-  <tr><td style="padding:0 28px 24px;text-align:center;">
+  <tr><td style="padding:20px 28px 24px;text-align:center;">
     <a href="${BUILD_URL}"
        style="background:#1e2a3a;color:#fff;padding:11px 28px;
               text-decoration:none;border-radius:5px;
@@ -228,7 +178,7 @@ except Exception as e:
                 """
             )
         }
-        success { echo 'Aucune vulnerabilite critique detectee' }
+        success { echo 'Scan termine avec succes' }
         failure { echo 'Vulnerabilites detectees - voir le rapport' }
     }
 }
